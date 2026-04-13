@@ -1,0 +1,1351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOCX → HTML 转换器</title>
+    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ===== Header ===== */
+        .header {
+            padding: 10px 16px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+        .header h1 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #f8fafc;
+            white-space: nowrap;
+        }
+        .header .file-name {
+            font-size: 13px;
+            color: #94a3b8;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        .btn {
+            padding: 6px 14px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .btn-primary { background: #3b82f6; color: #fff; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-primary:disabled { background: #475569; cursor: not-allowed; }
+        .btn-secondary { background: #334155; color: #e2e8f0; }
+        .btn-secondary:hover { background: #475569; }
+        .btn-danger { background: #7f1d1d; color: #fca5a5; }
+        .btn-danger:hover { background: #991b1b; }
+
+        /* ===== Drop Zone ===== */
+        .drop-zone {
+            margin: 24px;
+            padding: 48px;
+            border: 2px dashed #475569;
+            border-radius: 12px;
+            text-align: center;
+            transition: all 0.3s;
+            cursor: pointer;
+            background: #1e293b;
+        }
+        .drop-zone.drag-over {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.08);
+        }
+        .drop-zone svg { width: 48px; height: 48px; color: #64748b; margin-bottom: 16px; }
+        .drop-zone p { font-size: 15px; color: #94a3b8; }
+        .drop-zone p span { color: #3b82f6; font-weight: 500; }
+        .drop-zone .hint { font-size: 12px; color: #64748b; margin-top: 8px; }
+        .drop-zone.hidden { display: none; }
+
+        /* ===== Main Layout ===== */
+        .result-area {
+            flex: 1;
+            display: none;
+            flex-direction: row;
+            min-height: 0;
+        }
+        .result-area.visible { display: flex; }
+
+        /* ===== File Sidebar ===== */
+        .file-sidebar {
+            width: 240px;
+            min-width: 240px;
+            background: #1e293b;
+            border-right: 1px solid #334155;
+            display: flex;
+            flex-direction: column;
+        }
+        .sidebar-header {
+            padding: 10px 12px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .sidebar-header .count {
+            background: #334155;
+            padding: 1px 7px;
+            border-radius: 10px;
+            font-size: 10px;
+        }
+        .sidebar-add {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 8px;
+            border-bottom: 1px solid #334155;
+            cursor: pointer;
+            color: #64748b;
+            font-size: 12px;
+            gap: 4px;
+            transition: all 0.2s;
+        }
+        .sidebar-add:hover { background: #334155; color: #94a3b8; }
+        .sidebar-add svg { width: 14px; height: 14px; }
+
+        .file-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px;
+        }
+        .file-item {
+            padding: 8px 10px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #94a3b8;
+            transition: all 0.15s;
+            position: relative;
+        }
+        .file-item:hover { background: #334155; color: #e2e8f0; }
+        .file-item.active {
+            background: rgba(59, 130, 246, 0.15);
+            color: #93c5fd;
+        }
+        .file-item .file-icon {
+            width: 20px;
+            height: 20px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .file-item .file-icon svg { width: 16px; height: 16px; }
+        .file-item .file-info {
+            min-width: 0;
+            flex: 1;
+        }
+        .file-item .file-label {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .file-item .file-meta {
+            font-size: 10px;
+            color: #64748b;
+            margin-top: 1px;
+        }
+        .file-item .file-status {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .file-item .file-status.done { background: #22c55e; }
+        .file-item .file-status.error { background: #ef4444; }
+        .file-item .file-status.loading {
+            background: #3b82f6;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .file-item .file-remove {
+            display: none;
+            background: none;
+            border: none;
+            color: #64748b;
+            cursor: pointer;
+            padding: 2px;
+            border-radius: 4px;
+        }
+        .file-item:hover .file-remove { display: flex; }
+        .file-item .file-remove:hover { color: #f87171; background: rgba(239,68,68,0.1); }
+
+        /* Sidebar footer */
+        .sidebar-footer {
+            padding: 8px 12px;
+            border-top: 1px solid #334155;
+        }
+
+        /* ===== Content Area ===== */
+        .content-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            min-height: 0;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 0;
+            padding: 0 16px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+        }
+        .tab {
+            padding: 10px 16px;
+            font-size: 13px;
+            color: #94a3b8;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        .tab:hover { color: #e2e8f0; }
+        .tab.active { color: #3b82f6; border-bottom-color: #3b82f6; }
+        .toolbar-sep {
+            width: 1px;
+            height: 20px;
+            background: #334155;
+            margin: 0 8px;
+        }
+        .toolbar-info {
+            font-size: 11px;
+            color: #64748b;
+            margin-left: auto;
+        }
+
+        /* Panels */
+        .panels {
+            flex: 1;
+            min-height: 0;
+            position: relative;
+        }
+        .panel {
+            position: absolute;
+            inset: 0;
+            display: none;
+            overflow: auto;
+        }
+        .panel.active { display: block; }
+
+        /* HTML Source Panel */
+        .panel-code {
+            display: none;
+            flex-direction: column;
+            background: #0f172a;
+        }
+        .panel-code.active { display: flex !important; }
+        .code-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            border-bottom: 1px solid #334155;
+            flex-shrink: 0;
+        }
+        .btn-sm { padding: 4px 12px; font-size: 11px; }
+        .code-hint { font-size: 11px; color: #64748b; margin-left: 8px; }
+        .panel-code textarea {
+            flex: 1;
+            width: 100%;
+            resize: none;
+            border: none;
+            outline: none;
+            background: transparent;
+            padding: 16px 24px;
+            font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #cbd5e1;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Document Preview — Paper Style */
+        .panel-preview {
+            background: #64748b;
+            display: none;
+            padding: 32px 0;
+        }
+        .panel-preview.active { display: block; }
+
+        .doc-paper {
+            background: #fff;
+            width: 794px;
+            min-height: 1123px;
+            margin: 0 auto;
+            padding: 72px 80px;
+            box-shadow: 0 4px 24px rgba(0,0,0,.25);
+            color: #1e293b;
+            font-family: "SimSun", "Times New Roman", serif;
+            font-size: 14px;
+            line-height: 1.8;
+        }
+        .doc-paper h1 { font-size: 22px; font-weight: 700; margin: 24px 0 12px; color: #0f172a; line-height: 1.4; }
+        .doc-paper h2 { font-size: 18px; font-weight: 700; margin: 20px 0 10px; color: #1e293b; line-height: 1.4; }
+        .doc-paper h3 { font-size: 16px; font-weight: 700; margin: 16px 0 8px; color: #334155; line-height: 1.4; }
+        .doc-paper h4 { font-size: 15px; font-weight: 700; margin: 12px 0 6px; }
+        .doc-paper h5 { font-size: 14px; font-weight: 700; margin: 10px 0 6px; }
+        .doc-paper h6 { font-size: 13px; font-weight: 700; margin: 8px 0 4px; color: #64748b; }
+        .doc-paper p { margin: 6px 0; text-align: justify; }
+        .doc-paper table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
+        .doc-paper th, .doc-paper td { border: 1px solid #94a3b8; padding: 6px 10px; text-align: left; vertical-align: top; }
+        .doc-paper th { background: #f1f5f9; font-weight: 600; }
+        .doc-paper ul, .doc-paper ol { padding-left: 28px; margin: 6px 0; }
+        .doc-paper li { margin: 3px 0; }
+        .doc-paper img { max-width: 100%; height: auto; margin: 8px 0; }
+        .doc-paper strong, .doc-paper b { font-weight: 700; }
+        .doc-paper em, .doc-paper i { font-style: italic; }
+        .doc-paper u { text-decoration: underline; }
+        .doc-paper del, .doc-paper s { text-decoration: line-through; }
+        .doc-paper code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 13px; font-family: "Consolas", monospace; }
+        .doc-paper pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 12px 16px; overflow-x: auto; margin: 10px 0; font-size: 13px; line-height: 1.5; }
+        .doc-paper blockquote { border-left: 4px solid #94a3b8; padding: 4px 16px; margin: 10px 0; color: #475569; }
+        .doc-paper a { color: #2563eb; text-decoration: underline; }
+
+        /* Split View */
+        .panel-split { display: none; }
+        .panel-split.active { display: flex !important; }
+        .split-left, .split-right { flex: 1; overflow: auto; }
+        .split-left {
+            background: #0f172a;
+            border-right: 1px solid #334155;
+        }
+        .split-left pre {
+            padding: 16px;
+            font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            color: #cbd5e1;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        .split-right {
+            background: #64748b;
+            padding: 32px 0;
+        }
+
+        /* Warnings */
+        .warnings {
+            padding: 8px 14px;
+            background: #1e3a5f;
+            border-bottom: 1px solid #2563eb;
+            font-size: 12px;
+            color: #93c5fd;
+            display: none;
+        }
+        .warnings.visible { display: block; }
+        .warnings summary { cursor: pointer; font-weight: 600; margin-bottom: 4px; }
+        .warnings ul { padding-left: 20px; }
+        .warnings li { margin: 2px 0; }
+
+        /* Variables Panel */
+        .panel-vars {
+            padding: 24px;
+            background: #0f172a;
+        }
+        .panel-vars.active { display: block; }
+        .vars-empty { color: #64748b; text-align: center; padding: 40px; font-size: 14px; }
+        .vars-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+        .vars-table th {
+            text-align: left;
+            padding: 8px 12px;
+            background: #1e293b;
+            color: #94a3b8;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #334155;
+            position: sticky;
+            top: 0;
+        }
+        .vars-table td {
+            padding: 8px 12px;
+            border-bottom: 1px solid #1e293b;
+            color: #cbd5e1;
+        }
+        .vars-table tr:hover td { background: #1e293b; }
+        .vars-table .var-name {
+            font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+            color: #93c5fd;
+        }
+        .vars-table .var-full {
+            font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+            color: #fbbf24;
+            font-size: 12px;
+        }
+        .vars-table .var-context {
+            color: #94a3b8;
+            max-width: 500px;
+            white-space: normal;
+            word-break: break-all;
+            line-height: 1.5;
+        }
+        .vars-table .var-context mark {
+            background: rgba(251, 191, 36, 0.2);
+            color: #fbbf24;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+        .vars-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .vars-header h3 {
+            font-size: 14px;
+            color: #e2e8f0;
+        }
+        .vars-header .var-count {
+            font-size: 12px;
+            color: #64748b;
+        }
+        .vars-copy-btn {
+            font-size: 11px;
+            padding: 4px 12px;
+        }
+        .tag-auto, .tag-manual {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 10px;
+            font-size: 10px;
+            font-weight: 600;
+        }
+        .tag-auto { background: rgba(59,130,246,0.15); color: #93c5fd; }
+        .tag-manual { background: rgba(251,191,36,0.15); color: #fbbf24; }
+
+        /* Selection Mark Toolbar */
+        .mark-toolbar {
+            position: fixed;
+            display: none;
+            z-index: 1000;
+            background: #1e293b;
+            border: 1px solid #475569;
+            border-radius: 8px;
+            padding: 6px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            gap: 4px;
+            align-items: center;
+        }
+        .mark-toolbar.visible { display: flex; }
+        .mark-toolbar input {
+            background: #0f172a;
+            border: 1px solid #475569;
+            border-radius: 4px;
+            padding: 4px 8px;
+            color: #e2e8f0;
+            font-size: 12px;
+            font-family: "Cascadia Code", "Consolas", monospace;
+            width: 120px;
+            outline: none;
+        }
+        .mark-toolbar input:focus { border-color: #3b82f6; }
+        .mark-toolbar input::placeholder { color: #475569; }
+        .mark-toolbar .btn-sm { padding: 4px 10px; font-size: 11px; }
+        .mark-toolbar .occurrence-info {
+            font-size: 10px;
+            color: #64748b;
+            white-space: nowrap;
+        }
+        .mark-toolbar .btn-replace-all {
+            background: #854d0e;
+            color: #fde68a;
+        }
+        .mark-toolbar .btn-replace-all:hover { background: #a16207; }
+        .mark-occurrences {
+            position: fixed;
+            z-index: 999;
+            background: #1e293b;
+            border: 1px solid #475569;
+            border-radius: 8px;
+            padding: 8px 0;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            max-height: 200px;
+            overflow-y: auto;
+            min-width: 300px;
+            max-width: 500px;
+        }
+        .mark-occurrences .occ-header {
+            padding: 4px 12px;
+            font-size: 11px;
+            color: #94a3b8;
+            font-weight: 600;
+            border-bottom: 1px solid #334155;
+        }
+        .mark-occurrences .occ-item {
+            padding: 4px 12px;
+            font-size: 12px;
+            color: #cbd5e1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mark-occurrences .occ-item:hover { background: #334155; }
+        .mark-occurrences .occ-item mark {
+            background: rgba(251, 191, 36, 0.3);
+            color: #fbbf24;
+            padding: 0 2px;
+            border-radius: 2px;
+        }
+        .occ-panel { display: none; }
+        .occ-panel.visible { display: block; }
+
+        /* Source marker (preview highlight) */
+        .doc-paper ::selection {
+            background: rgba(59, 130, 246, 0.3);
+        }
+        .var-highlight {
+            background: rgba(251, 191, 36, 0.25);
+            border-bottom: 2px solid #fbbf24;
+            padding: 0 1px;
+            border-radius: 2px;
+        }
+
+        /* Global drag */
+        body.dragging .drop-zone {
+            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.08);
+        }
+    </style>
+</head>
+<body>
+    <!-- Mark Toolbar (floating) -->
+    <div class="mark-toolbar" id="markToolbar">
+        <input type="text" id="varNameInput" placeholder="variable name" autocomplete="off">
+        <span class="occurrence-info" id="occurrenceInfo" onclick="toggleOccPanel()" style="cursor:pointer" title="Click to see all occurrences"></span>
+        <button class="btn btn-primary btn-sm" onclick="confirmMark(false)">Mark</button>
+        <button class="btn btn-sm btn-replace-all" id="btnReplaceAll" onclick="confirmMark(true)" style="display:none">Replace All</button>
+        <button class="btn btn-secondary btn-sm" onclick="hideMarkToolbar()">Cancel</button>
+    </div>
+    <div class="mark-occurrences occ-panel" id="occPanel"></div>
+
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <h1>DOCX → HTML</h1>
+            <span class="file-name" id="fileName"></span>
+        </div>
+        <div class="header-actions">
+            <button class="btn btn-primary" id="btnCopy" disabled onclick="copyCurrentHTML()">Copy HTML</button>
+            <button class="btn btn-primary" id="btnDownload" disabled onclick="downloadCurrentHTML()">Download</button>
+            <button class="btn btn-primary" id="btnDownloadAll" disabled onclick="downloadAllHTML()">Download All</button>
+        </div>
+    </div>
+
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12l-3-3m0 0l-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+        </svg>
+        <p>拖拽 .docx 文件到这里，或 <span>点击选择文件</span></p>
+        <p class="hint">支持批量拖入多个文件 &mdash; 图片内嵌、样式还原</p>
+        <input type="file" id="fileInput" accept=".docx" multiple hidden>
+    </div>
+
+    <!-- Result Area -->
+    <div class="result-area" id="resultArea">
+        <!-- File Sidebar -->
+        <div class="file-sidebar">
+            <div class="sidebar-header">
+                <span>Files</span>
+                <span class="count" id="fileCount">0</span>
+            </div>
+            <div class="sidebar-add" id="sidebarAdd" onclick="fileInput.click()">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                Add files
+            </div>
+            <div class="file-list" id="fileList"></div>
+            <div class="sidebar-footer">
+                <button class="btn btn-danger" style="width:100%" onclick="clearAll()">Clear All</button>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="content-area">
+            <div class="warnings" id="warnings">
+                <summary>提示（不影响转换结果，可忽略）</summary>
+                <ul id="warningList"></ul>
+            </div>
+            <div class="toolbar">
+                <div class="tab active" data-tab="preview" onclick="switchTab('preview')">Preview</div>
+                <div class="tab" data-tab="code" onclick="switchTab('code')">HTML Source</div>
+                <div class="tab" data-tab="split" onclick="switchTab('split')">Split View</div>
+                <div class="tab" data-tab="vars" onclick="switchTab('vars')">Variables</div>
+                <div class="toolbar-sep"></div>
+                <span class="toolbar-info" id="toolbarInfo"></span>
+            </div>
+            <div class="panels">
+                <div class="panel panel-preview active" id="panelPreview">
+                    <div class="doc-paper" id="previewContent"></div>
+                </div>
+                <div class="panel panel-code" id="panelCode">
+                    <div class="code-toolbar">
+                        <button class="btn btn-primary btn-sm" onclick="applyEdit()">Apply Changes</button>
+                        <button class="btn btn-secondary btn-sm" onclick="resetEdit()">Reset</button>
+                        <span class="code-hint">Edit HTML below, then click Apply to update preview</span>
+                    </div>
+                    <textarea id="codeContent" spellcheck="false"></textarea>
+                </div>
+                <div class="panel panel-split" id="panelSplit">
+                    <div class="split-left"><pre id="splitCode"></pre></div>
+                    <div class="split-right"><div class="doc-paper" id="splitPreview"></div></div>
+                </div>
+                <div class="panel panel-vars" id="panelVars">
+                    <div class="vars-content" id="varsContent">
+                        <p class="vars-empty">No variables detected</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ===== State =====
+        const docStore = new Map();  // id -> { name, html, size, status, warnings, manualVars: [] }
+        let activeId = null;
+        let idCounter = 0;
+        let pendingSelection = null; // { text, range }
+        let plainTextCache = '';     // cache stripped HTML for fast occurrence counting
+
+        // ===== DOM refs =====
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const resultArea = document.getElementById('resultArea');
+        const fileNameEl = document.getElementById('fileName');
+        const btnCopy = document.getElementById('btnCopy');
+        const btnDownload = document.getElementById('btnDownload');
+        const btnDownloadAll = document.getElementById('btnDownloadAll');
+        const previewContent = document.getElementById('previewContent');
+        const codeContent = document.getElementById('codeContent');
+        const splitCode = document.getElementById('splitCode');
+        const splitPreview = document.getElementById('splitPreview');
+        const warningsEl = document.getElementById('warnings');
+        const warningList = document.getElementById('warningList');
+        const toolbarInfo = document.getElementById('toolbarInfo');
+        const fileList = document.getElementById('fileList');
+        const fileCount = document.getElementById('fileCount');
+
+        // ===== Events =====
+        // Chinese → English variable name dictionary
+        const VAR_DICT = {
+            '甲方': 'partyA', '乙方': 'partyB', '丙方': 'partyC',
+            '出租方': 'landlord', '承租方': 'tenant', '房东': 'landlord', '租客': 'tenant',
+            '甲方名称': 'partyAName', '乙方名称': 'partyBName',
+            '甲方地址': 'partyAAddress', '乙方地址': 'partyBAddress',
+            '甲方电话': 'partyAPhone', '乙方电话': 'partyBPhone',
+            '甲方身份证': 'partyAIdCard', '乙方身份证': 'partyBIdCard',
+            '甲方代表': 'partyARepresentative', '乙方代表': 'partyBRepresentative',
+            '姓名': 'name', '名称': 'name', '公司名称': 'companyName',
+            '地址': 'address', '住所': 'address', '联系地址': 'contactAddress',
+            '电话': 'phone', '联系电话': 'contactPhone', '手机': 'mobile',
+            '身份证号': 'idCardNo', '身份证号码': 'idCardNumber',
+            '证件号码': 'idNumber', '证件号': 'idNo',
+            '邮箱': 'email', '电子邮件': 'email',
+            '金额': 'amount', '总金额': 'totalAmount', '合同金额': 'contractAmount',
+            '租金': 'rent', '月租': 'monthlyRent', '月租金': 'monthlyRent',
+            '押金': 'deposit', '定金': 'deposit', '预付款': 'prepayment',
+            '首付': 'downPayment', '尾款': 'balance', '余款': 'remainingAmount',
+            '付款方式': 'paymentMethod', '支付方式': 'paymentMethod',
+            '银行账号': 'bankAccount', '银行账户': 'bankAccount', '开户行': 'bankName',
+            '开户银行': 'bankName', '账号': 'accountNo',
+            '日期': 'date', '签署日期': 'signDate', '签约日期': 'signDate',
+            '签订日期': 'signDate', '生效日期': 'effectiveDate',
+            '到期日期': 'expiryDate', '截止日期': 'deadline', '终止日期': 'endDate',
+            '开始日期': 'startDate', '结束日期': 'endDate',
+            '合同编号': 'contractNo', '合同号': 'contractNo', '编号': 'serialNo',
+            '合同期限': 'contractPeriod', '租赁期限': 'leaseTerm', '期限': 'period',
+            '房屋地址': 'propertyAddress', '房屋面积': 'propertyArea',
+            '房屋编号': 'propertyNo', '房间号': 'roomNo',
+            '面积': 'area', '平方米': 'areaInSqm',
+            '年': 'year', '月': 'month', '日': 'day',
+            '有效期': 'validPeriod', '有效期限': 'validPeriod',
+            '价格': 'price', '单价': 'unitPrice', '总价': 'totalPrice',
+            '数量': 'quantity', '规格': 'specification', '型号': 'model',
+            '备注': 'remark', '说明': 'description', '描述': 'description',
+            '签字': 'signature', '签名': 'signature', '盖章': 'stamp',
+            '公章': 'officialSeal', '法人': 'legalPerson', '法定代表人': 'legalRepresentative',
+            '授权代表': 'authorizedRepresentative', '授权人': 'authorizer',
+            '项目名称': 'projectName', '项目': 'project',
+            '商品名称': 'productName', '产品名称': 'productName',
+            '订单号': 'orderNo', '订单编号': 'orderNo',
+            '发票号': 'invoiceNo', '发票编号': 'invoiceNo',
+            '税率': 'taxRate', '税额': 'taxAmount', '含税': 'taxIncluded',
+            '币种': 'currency', '汇率': 'exchangeRate',
+            '担保人': 'guarantor', '保证人': 'guarantor',
+            '受益人': 'beneficiary', '收款人': 'payee', '付款人': 'payer',
+            '收货人': 'consignee', '收货地址': 'deliveryAddress',
+            '退货地址': 'returnAddress', '物流公司': 'logisticsCompany',
+            '运单号': 'trackingNo', '快递单号': 'trackingNo',
+        };
+
+        function suggestVarName(text) {
+            const trimmed = text.trim();
+            // 1. Exact dictionary match
+            if (VAR_DICT[trimmed]) return VAR_DICT[trimmed];
+            // 2. Check if text contains a dict key
+            for (const [cn, en] of Object.entries(VAR_DICT)) {
+                if (trimmed.includes(cn)) return en;
+            }
+            // 3. If pure English, camelCase it
+            if (/^[a-zA-Z\s]+$/.test(trimmed)) {
+                return trimmed.split(/\s+/).map((w, i) =>
+                    i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
+                ).join('');
+            }
+            // 4. Fallback: use text as-is (stripped)
+            return trimmed.replace(/\s+/g, '').slice(0, 20);
+        }
+
+        function countOccurrences(html, text) {
+            if (!plainTextCache || plainTextCache._html !== html) {
+                plainTextCache = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ');
+                plainTextCache._html = html;
+            }
+            let count = 0, pos = 0;
+            const search = text.trim();
+            while ((pos = plainTextCache.indexOf(search, pos)) !== -1) {
+                count++;
+                pos += search.length;
+            }
+            return count;
+        }
+
+        function findOccurrences(html, text) {
+            if (!plainTextCache || plainTextCache._html !== html) {
+                plainTextCache = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ');
+                plainTextCache._html = html;
+            }
+            const results = [];
+            let pos = 0;
+            const search = text.trim();
+            while ((pos = plainTextCache.indexOf(search, pos)) !== -1) {
+                const start = Math.max(0, pos - 25);
+                const end = Math.min(plainTextCache.length, pos + search.length + 25);
+                let ctx = plainTextCache.slice(start, end).replace(/\s+/g, ' ').trim();
+                results.push(ctx);
+                pos += search.length;
+            }
+            return results;
+        }
+
+        function toggleOccPanel() {
+            const panel = document.getElementById('occPanel');
+            if (panel.classList.contains('visible')) {
+                panel.classList.remove('visible');
+                return;
+            }
+            if (!pendingSelection || !activeId || !docStore.has(activeId)) return;
+            const doc = docStore.get(activeId);
+            const occurrences = findOccurrences(doc.html, pendingSelection.text);
+            const search = pendingSelection.text.trim();
+            const escapedSearch = escapeHtml(search);
+            const items = occurrences.map(ctx => {
+                const highlighted = escapeHtml(ctx).replace(escapedSearch, '<mark>' + escapedSearch + '</mark>');
+                return `<div class="occ-item">${highlighted}</div>`;
+            }).join('');
+            panel.innerHTML = `<div class="occ-header">${occurrences.length} occurrences found</div>${items}`;
+            // Position below toolbar
+            const tbRect = markToolbar.getBoundingClientRect();
+            panel.style.top = (tbRect.bottom + 4) + 'px';
+            panel.style.left = tbRect.left + 'px';
+            panel.classList.add('visible');
+        }
+
+        // Selection listener for mark-variable feature
+        const markToolbar = document.getElementById('markToolbar');
+        const varNameInput = document.getElementById('varNameInput');
+
+        // Debounce selection check
+        let selTimeout = null;
+        document.addEventListener('mouseup', (e) => {
+            // Don't interfere if clicking on the toolbar itself
+            if (markToolbar.contains(e.target)) return;
+
+            clearTimeout(selTimeout);
+            selTimeout = setTimeout(() => {
+                const sel = window.getSelection();
+                const text = sel.toString().trim();
+                // Check if selection is inside previewContent
+                if (!text || !sel.rangeCount || !previewContent.contains(sel.anchorNode)) {
+                    hideMarkToolbar();
+                    return;
+                }
+                pendingSelection = { text };
+                // Auto-suggest variable name
+                const suggestion = suggestVarName(text);
+                varNameInput.value = suggestion;
+                // Count occurrences
+                const doc = docStore.get(activeId);
+                const occurrences = doc ? countOccurrences(doc.html, text) : 1;
+                const occInfo = document.getElementById('occurrenceInfo');
+                const btnReplaceAll = document.getElementById('btnReplaceAll');
+                occInfo.textContent = occurrences > 1 ? `${occurrences}处` : '';
+                btnReplaceAll.style.display = occurrences > 1 ? 'inline-block' : 'none';
+                // Position toolbar near selection
+                const rect = sel.getRangeAt(0).getBoundingClientRect();
+                const vpHeight = window.innerHeight;
+                let top = rect.bottom + 8;
+                let left = rect.left;
+                if (top + 40 > vpHeight) top = rect.top - 44;
+                if (left + 340 > window.innerWidth) left = window.innerWidth - 350;
+                markToolbar.style.top = top + 'px';
+                markToolbar.style.left = Math.max(8, left) + 'px';
+                markToolbar.classList.add('visible');
+                setTimeout(() => varNameInput.focus(), 50);
+            }, 100);
+        });
+
+        // Hide toolbar when clicking outside
+        document.addEventListener('mousedown', (e) => {
+            if (markToolbar.contains(e.target)) return;
+            hideMarkToolbar();
+        });
+
+        // Prevent toolbar interactions from stealing focus / collapsing selection
+        markToolbar.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+        });
+
+        varNameInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') confirmMark();
+            if (e.key === 'Escape') hideMarkToolbar();
+        });
+
+        function hideMarkToolbar() {
+            markToolbar.classList.remove('visible');
+            document.getElementById('occPanel').classList.remove('visible');
+            pendingSelection = null;
+        }
+
+        function confirmMark(replaceAll) {
+            if (!pendingSelection || !activeId || !docStore.has(activeId)) {
+                hideMarkToolbar();
+                return;
+            }
+            const varName = varNameInput.value.trim() || suggestVarName(pendingSelection.text);
+            if (!varName) { hideMarkToolbar(); return; }
+
+            const doc = docStore.get(activeId);
+            const selectedText = pendingSelection.text;
+
+            // Store the manual variable mapping
+            if (!doc.manualVars) doc.manualVars = [];
+            doc.manualVars.push({ original: selectedText, varName: varName });
+
+            // Replace in HTML
+            const fullVar = '${' + varName + '}';
+            doc.html = replaceTextInHtml(doc.html, selectedText, fullVar, replaceAll);
+
+            // Re-render
+            previewContent.innerHTML = doc.html;
+            splitPreview.innerHTML = doc.html;
+            codeContent.value = formatHTML(doc.html);
+            splitCode.textContent = formatHTML(doc.html);
+            renderVariables(extractVariables(doc.html), doc.manualVars);
+
+            const replacedCount = replaceAll ? countOccurrences(doc.html, selectedText) === 0 ? 'all' : 'some' : '1';
+            window.getSelection().removeAllRanges();
+            hideMarkToolbar();
+        }
+
+        function replaceTextInHtml(html, searchText, replacement, replaceAll) {
+            // Split HTML into tags and text, only replace in text portions
+            const parts = html.split(/(<[^>]+>)/);
+            let count = 0;
+            for (let i = 0; i < parts.length; i++) {
+                if (parts[i].startsWith('<')) continue;
+                while (parts[i].includes(searchText)) {
+                    parts[i] = parts[i].replace(searchText, replacement);
+                    count++;
+                    if (!replaceAll) break;
+                }
+                if (!replaceAll && count > 0) break;
+            }
+            return parts.join('');
+        }
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) handleFiles(Array.from(e.target.files));
+            fileInput.value = '';
+        });
+
+        // Drag — drop zone
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length) handleFiles(Array.from(e.dataTransfer.files));
+        });
+
+        // Global drag
+        document.addEventListener('dragover', (e) => e.preventDefault());
+        document.addEventListener('drop', (e) => {
+            e.preventDefault();
+            if (e.dataTransfer.files.length) handleFiles(Array.from(e.dataTransfer.files));
+        });
+
+        // ===== Batch Processing =====
+        function handleFiles(files) {
+            const validFiles = files.filter(f => f.name.endsWith('.docx') || f.name.endsWith('.doc'));
+            if (!validFiles.length) {
+                alert('请选择 .docx 文件');
+                return;
+            }
+
+            // Create entries & render sidebar immediately
+            const newIds = [];
+            for (const file of validFiles) {
+                const id = ++idCounter;
+                docStore.set(id, { name: file.name, html: '', size: file.size, status: 'loading', warnings: [], manualVars: [] });
+                newIds.push({ id, file });
+            }
+
+            // Show result area
+            dropZone.classList.add('hidden');
+            resultArea.classList.add('visible');
+            renderSidebar();
+
+            // Select first new file
+            if (newIds.length) selectFile(newIds[0].id);
+
+            // Process in parallel
+            for (const { id, file } of newIds) {
+                convertFile(id, file);
+            }
+        }
+
+        function convertFile(id, file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const arrayBuffer = e.target.result;
+                const header = new Uint8Array(arrayBuffer.slice(0, 8));
+                const isZip  = header[0] === 0x50 && header[1] === 0x4B;
+                const isOLE2 = header[0] === 0xD0 && header[1] === 0xCF;
+
+                if (isOLE2) {
+                    docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['旧版 .doc 格式，请另存为 .docx'] });
+                    renderSidebar();
+                    if (activeId === id) renderActiveDoc();
+                    return;
+                }
+                if (!isZip) {
+                    docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['文件格式无效，不是标准 .docx'] });
+                    renderSidebar();
+                    if (activeId === id) renderActiveDoc();
+                    return;
+                }
+
+                mammoth.convertToHtml({ arrayBuffer }, {
+                    convertImage: mammoth.images.imgElement(function(image) {
+                        return image.read("base64then").then(function(imageBuffer) {
+                            return { src: "data:" + image.contentType + ";base64," + imageBuffer };
+                        });
+                    }),
+                }).then(result => {
+                    docStore.set(id, {
+                        name: file.name,
+                        html: result.value,
+                        size: file.size,
+                        status: 'done',
+                        warnings: result.messages.map(m => m.message)
+                    });
+                    renderSidebar();
+                    if (activeId === id) renderActiveDoc();
+                }).catch(err => {
+                    docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: [err.message] });
+                    renderSidebar();
+                    if (activeId === id) renderActiveDoc();
+                });
+            };
+            reader.onerror = () => {
+                docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['文件读取失败'] });
+                renderSidebar();
+                if (activeId === id) renderActiveDoc();
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        // ===== Sidebar =====
+        function renderSidebar() {
+            const entries = Array.from(docStore.entries());
+            fileCount.textContent = entries.length;
+
+            fileList.innerHTML = entries.map(([id, doc]) => `
+                <div class="file-item ${id === activeId ? 'active' : ''}" onclick="selectFile(${id})" title="${escapeAttr(doc.name)}">
+                    <div class="file-icon">
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                        </svg>
+                    </div>
+                    <div class="file-info">
+                        <div class="file-label">${escapeHtml(doc.name)}</div>
+                        <div class="file-meta">${(doc.size / 1024).toFixed(1)} KB${doc.status === 'done' && doc.html ? ' · ' + (doc.html.length / 1024).toFixed(1) + ' KB HTML' : ''}</div>
+                    </div>
+                    <div class="file-status ${doc.status}"></div>
+                    <button class="file-remove" onclick="event.stopPropagation(); removeFile(${id})" title="Remove">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+            `).join('');
+
+            // Buttons
+            const hasDone = entries.some(([_, d]) => d.status === 'done');
+            btnDownloadAll.disabled = !hasDone;
+        }
+
+        function selectFile(id) {
+            activeId = id;
+            renderSidebar();
+            renderActiveDoc();
+        }
+
+        function removeFile(id) {
+            docStore.delete(id);
+            if (activeId === id) {
+                const remaining = Array.from(docStore.keys());
+                activeId = remaining.length ? remaining[0] : null;
+            }
+            if (docStore.size === 0) {
+                resetTool();
+                return;
+            }
+            renderSidebar();
+            renderActiveDoc();
+        }
+
+        function clearAll() {
+            docStore.clear();
+            activeId = null;
+            resetTool();
+        }
+
+        function resetTool() {
+            dropZone.classList.remove('hidden');
+            resultArea.classList.remove('visible');
+            btnCopy.disabled = true;
+            btnDownload.disabled = true;
+            btnDownloadAll.disabled = true;
+            fileNameEl.textContent = '';
+            fileInput.value = '';
+            warningsEl.classList.remove('visible');
+            toolbarInfo.textContent = '';
+            switchTab('preview');
+        }
+
+        // ===== Render Active Doc =====
+        function renderActiveDoc() {
+            if (!activeId || !docStore.has(activeId)) {
+                fileNameEl.textContent = '';
+                previewContent.innerHTML = '';
+                codeContent.value = '';
+                splitCode.textContent = '';
+                splitPreview.innerHTML = '';
+                btnCopy.disabled = true;
+                btnDownload.disabled = true;
+                warningsEl.classList.remove('visible');
+                return;
+            }
+
+            const doc = docStore.get(activeId);
+            fileNameEl.textContent = `${doc.name} (${(doc.size / 1024).toFixed(1)} KB)`;
+
+            if (doc.status === 'loading') {
+                previewContent.innerHTML = '<p style="color:#64748b;text-align:center;padding:40px;">Converting...</p>';
+                codeContent.value = 'Converting...';
+                splitCode.textContent = 'Converting...';
+                splitPreview.innerHTML = '';
+                btnCopy.disabled = true;
+                btnDownload.disabled = true;
+                warningsEl.classList.remove('visible');
+                toolbarInfo.textContent = '';
+                return;
+            }
+
+            if (doc.status === 'error') {
+                previewContent.innerHTML = `<div style="padding:40px;text-align:center;color:#ef4444;">
+                    <p style="font-size:16px;font-weight:600;margin-bottom:8px;">Conversion Failed</p>
+                    <p>${escapeHtml(doc.warnings.join('\n'))}</p>
+                </div>`;
+                codeContent.value = '';
+                splitCode.textContent = '';
+                splitPreview.innerHTML = '';
+                btnCopy.disabled = true;
+                btnDownload.disabled = true;
+                if (doc.warnings.length) {
+                    warningList.innerHTML = doc.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('');
+                    warningsEl.classList.add('visible');
+                }
+                toolbarInfo.textContent = 'error';
+                return;
+            }
+
+            // Done
+            const html = doc.html;
+            previewContent.innerHTML = html;
+            splitPreview.innerHTML = html;
+            codeContent.value = formatHTML(html);
+            splitCode.textContent = formatHTML(html);
+            btnCopy.disabled = false;
+            btnDownload.disabled = false;
+
+            // Stats
+            const imgCount = (html.match(/<img /g) || []).length;
+            const tableCount = (html.match(/<table/g) || []).length;
+            const vars = extractVariables(html);
+            const stats = [`${(html.length / 1024).toFixed(1)} KB HTML`];
+            if (imgCount) stats.push(`${imgCount} images`);
+            if (tableCount) stats.push(`${tableCount} tables`);
+            if (vars.length) stats.push(`${vars.length} variables`);
+            toolbarInfo.textContent = stats.join(' · ');
+
+            // Variables
+            renderVariables(vars, doc.manualVars || []);
+
+            // Warnings
+            if (doc.warnings.length) {
+                warningList.innerHTML = doc.warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('');
+                warningsEl.classList.add('visible');
+            } else {
+                warningsEl.classList.remove('visible');
+            }
+        }
+
+        // ===== Variables =====
+        function extractVariables(html) {
+            const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ');
+            const regex = /\$\{([^}]+)\}/g;
+            const seen = new Map(); // varName -> { count, contexts }
+            let m;
+            while ((m = regex.exec(text)) !== null) {
+                const full = m[0];
+                const name = m[1];
+                const start = Math.max(0, m.index - 30);
+                const end = Math.min(text.length, m.index + full.length + 30);
+                let ctx = text.slice(start, end).replace(/\s+/g, ' ').trim();
+                if (!seen.has(name)) seen.set(name, { count: 0, contexts: [] });
+                const entry = seen.get(name);
+                entry.count++;
+                if (entry.contexts.length < 3) entry.contexts.push(ctx);
+            }
+            return Array.from(seen.entries()).map(([name, data]) => ({ name, full: '${' + name + '}', count: data.count, contexts: data.contexts }));
+        }
+
+        function renderVariables(vars, manualVars) {
+            manualVars = manualVars || [];
+            const el = document.getElementById('varsContent');
+            if (!vars.length && !manualVars.length) {
+                el.innerHTML = '<p class="vars-empty">No template variables detected. Select text in Preview and use the mark toolbar to create variables.</p>';
+                return;
+            }
+
+            // Auto-detected rows
+            const autoRows = vars.map((v, i) => {
+                const ctxHtml = v.contexts.map(c => {
+                    const highlighted = escapeHtml(c).replace(/\$\{[^}]+\}/g, '<mark>$&</mark>');
+                    return `<div class="var-context" title="${escapeAttr(c)}">${highlighted}</div>`;
+                }).join('');
+                return `<tr>
+                    <td>${i + 1}</td>
+                    <td class="var-name">${escapeHtml(v.name)}</td>
+                    <td class="var-full">${escapeHtml(v.full)}</td>
+                    <td>${v.count}</td>
+                    <td>${ctxHtml}</td>
+                    <td><span class="tag-auto">auto</span></td>
+                </tr>`;
+            }).join('');
+
+            // Manual rows
+            const manualRows = manualVars.map((v, i) => {
+                return `<tr>
+                    <td>${vars.length + i + 1}</td>
+                    <td class="var-name">${escapeHtml(v.varName)}</td>
+                    <td class="var-full">${escapeHtml('${' + v.varName + '}')}</td>
+                    <td>1</td>
+                    <td><div class="var-context">${escapeHtml(v.original)}</div></td>
+                    <td><span class="tag-manual">manual</span></td>
+                </tr>`;
+            }).join('');
+
+            const totalAuto = vars.reduce((s, v) => s + v.count, 0);
+            const totalCount = totalAuto + manualVars.length;
+
+            el.innerHTML = `
+                <div class="vars-header">
+                    <h3>Template Variables</h3>
+                    <div>
+                        <span class="var-count">${vars.length + manualVars.length} unique / ${totalCount} total</span>
+                        <button class="btn btn-secondary vars-copy-btn" onclick="copyVarList()">Copy All</button>
+                    </div>
+                </div>
+                <table class="vars-table">
+                    <thead><tr>
+                        <th style="width:40px">#</th>
+                        <th>Variable</th>
+                        <th>Full Syntax</th>
+                        <th style="width:60px">Count</th>
+                        <th>Context / Original</th>
+                        <th style="width:60px">Source</th>
+                    </tr></thead>
+                    <tbody>${autoRows}${manualRows}</tbody>
+                </table>`;
+        }
+
+        function copyVarList() {
+            if (!activeId || !docStore.has(activeId)) return;
+            const doc = docStore.get(activeId);
+            const vars = extractVariables(doc.html);
+            const manualVars = doc.manualVars || [];
+            const lines = vars.map(v => `${v.full}\t${v.name}\t${v.count}\tauto`);
+            manualVars.forEach(v => lines.push(`\${${v.varName}}\t${v.varName}\t1\tmanual\t← ${v.original}`));
+            navigator.clipboard.writeText(lines.join('\n')).then(() => {
+                const btn = document.querySelector('.vars-copy-btn');
+                btn.textContent = 'Copied!';
+                setTimeout(() => btn.textContent = 'Copy All', 1200);
+            });
+        }
+
+        // ===== Edit & Apply =====
+        function applyEdit() {
+            if (!activeId || !docStore.has(activeId)) return;
+            const edited = codeContent.value;
+            docStore.get(activeId).html = edited;
+            previewContent.innerHTML = edited;
+            splitPreview.innerHTML = edited;
+            splitCode.textContent = edited;
+            btnApplyFlash();
+        }
+
+        function resetEdit() {
+            if (!activeId || !docStore.has(activeId)) return;
+            const original = docStore.get(activeId).html;
+            codeContent.value = formatHTML(original);
+            previewContent.innerHTML = original;
+            splitPreview.innerHTML = original;
+            splitCode.textContent = formatHTML(original);
+        }
+
+        function btnApplyFlash() {
+            const btn = document.querySelector('.code-toolbar .btn-primary');
+            btn.textContent = 'Applied!';
+            setTimeout(() => btn.textContent = 'Apply Changes', 1200);
+        }
+
+        // ===== Tabs =====
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
+            document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+            document.getElementById(`panel${tab.charAt(0).toUpperCase() + tab.slice(1)}`).classList.add('active');
+        }
+
+        // ===== Actions =====
+        function copyCurrentHTML() {
+            if (!activeId || !docStore.has(activeId)) return;
+            const html = docStore.get(activeId).html;
+            navigator.clipboard.writeText(html).then(() => {
+                btnCopy.textContent = 'Copied!';
+                setTimeout(() => btnCopy.textContent = 'Copy HTML', 1500);
+            });
+        }
+
+        function downloadCurrentHTML() {
+            if (!activeId || !docStore.has(activeId)) return;
+            const doc = docStore.get(activeId);
+            downloadSingleHTML(doc.name.replace(/\.docx?$/i, ''), doc.html);
+        }
+
+        function downloadAllHTML() {
+            for (const [_, doc] of docStore) {
+                if (doc.status === 'done' && doc.html) {
+                    downloadSingleHTML(doc.name.replace(/\.docx?$/i, ''), doc.html);
+                }
+            }
+        }
+
+        function downloadSingleHTML(baseName, html) {
+            const fullHTML = `<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<title>${escapeHtml(baseName)}</title>\n<style>body{font-family:"SimSun","Times New Roman",serif;max-width:800px;margin:40px auto;padding:0 20px;color:#1e293b;line-height:1.8;font-size:14px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #94a3b8;padding:6px 10px;text-align:left}th{background:#f1f5f9}img{max-width:100%;height:auto}h1{font-size:22px}h2{font-size:18px}h3{font-size:16px}p{text-align:justify;margin:6px 0}ul,ol{padding-left:28px}</style>\n</head>\n<body>\n${html}\n</body>\n</html>`;
+            const blob = new Blob([fullHTML], { type: 'text/html' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = baseName + '.html';
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
+
+        // ===== Utils =====
+        function formatHTML(html) {
+            return html
+                .replace(/<\/(h[1-6]|p|div|li|tr|table|ul|ol|blockquote)>/gi, '$&\n')
+                .replace(/<(h[1-6]|p|div|li|tr|table|ul|ol|blockquote)[^>]*>/gi, '\n$&')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+        }
+
+        function escapeHtml(str) {
+            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function escapeAttr(str) {
+            return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+    </script>
+</body>
+</html>
