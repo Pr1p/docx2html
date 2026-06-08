@@ -1,0 +1,17 @@
+# LibreOffice generated HTML (keep only source)
+*.html
+!index.html
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Test scripts
+test_*.py
+check_*.py
+
+# Preview files
+*preview*
+
+# Server log files
+*.log

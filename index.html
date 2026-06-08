@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DOCX → HTML 转换器</title>
-    <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -334,11 +334,18 @@
         .doc-paper h5 { font-size: 14px; font-weight: 700; margin: 10px 0 6px; }
         .doc-paper h6 { font-size: 13px; font-weight: 700; margin: 8px 0 4px; color: #64748b; }
         .doc-paper p { margin: 6px 0; text-align: justify; }
+        .doc-paper p[align="center"] { text-align: center; }
+        .doc-paper p[align="left"] { text-align: left; }
+        .doc-paper p[align="right"] { text-align: right; }
+        .doc-paper p[style*="text-align"] { /* inline style wins */ }
         .doc-paper table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13px; }
         .doc-paper th, .doc-paper td { border: 1px solid #94a3b8; padding: 6px 10px; text-align: left; vertical-align: top; }
         .doc-paper th { background: #f1f5f9; font-weight: 600; }
         .doc-paper ul, .doc-paper ol { padding-left: 28px; margin: 6px 0; }
         .doc-paper li { margin: 3px 0; }
+        /* LibreOffice nested ol without <li> wrapper */
+        .doc-paper ol ol, .doc-paper ol ol ol { padding-left: 28px; margin: 2px 0; }
+        .doc-paper ol ol ol { padding-left: 28px; }
         .doc-paper img { max-width: 100%; height: auto; margin: 8px 0; }
         .doc-paper strong, .doc-paper b { font-weight: 700; }
         .doc-paper em, .doc-paper i { font-style: italic; }
@@ -466,6 +473,51 @@
         .tag-auto { background: rgba(59,130,246,0.15); color: #93c5fd; }
         .tag-manual { background: rgba(251,191,36,0.15); color: #fbbf24; }
 
+        /* Variable position columns */
+        .vars-table .pos-page {
+            font-weight: 600;
+            color: #93c5fd;
+            text-align: center;
+        }
+        .vars-table .pos-coord {
+            font-family: "Cascadia Code", "Consolas", monospace;
+            font-size: 11px;
+            color: #a5b4fc;
+        }
+        .btn-locate {
+            background: none;
+            border: 1px solid #475569;
+            color: #94a3b8;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-locate:hover { border-color: #3b82f6; color: #3b82f6; background: rgba(59,130,246,0.1); }
+
+        /* Variable marker in preview */
+        .var-marker {
+            background: rgba(251, 191, 36, 0.2);
+            border-bottom: 2px solid #fbbf24;
+            padding: 0 1px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .var-marker:hover {
+            background: rgba(251, 191, 36, 0.45);
+        }
+        .var-marker.flash {
+            background: rgba(59, 130, 246, 0.5);
+            border-bottom-color: #3b82f6;
+            animation: flash-pulse 0.6s ease-in-out 3;
+        }
+        @keyframes flash-pulse {
+            0%, 100% { background: rgba(59, 130, 246, 0.3); }
+            50% { background: rgba(59, 130, 246, 0.7); }
+        }
+
         /* Selection Mark Toolbar */
         .mark-toolbar {
             position: fixed;
@@ -575,6 +627,7 @@
     <div class="header">
         <div class="header-left">
             <h1>DOCX → HTML</h1>
+            <span id="backendStatus" style="font-size:11px;margin-right:8px;cursor:help"></span>
             <span class="file-name" id="fileName"></span>
         </div>
         <div class="header-actions">
@@ -589,9 +642,9 @@
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m6.75 12l-3-3m0 0l-3 3m3-3v6m-1.5-15H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
         </svg>
-        <p>拖拽 .docx 文件到这里，或 <span>点击选择文件</span></p>
-        <p class="hint">支持批量拖入多个文件 &mdash; 图片内嵌、样式还原</p>
-        <input type="file" id="fileInput" accept=".docx" multiple hidden>
+        <p>拖拽 .docx / .html 文件到这里，或 <span>点击选择文件</span></p>
+        <p class="hint">.docx 通过 LibreOffice 转换（保留自动序号/排版）| .html 直接导入 | 启动后端: python server.py</p>
+        <input type="file" id="fileInput" accept=".docx,.html,.htm" multiple hidden>
     </div>
 
     <!-- Result Area -->
@@ -654,12 +707,57 @@
     </div>
 
     <script>
+        // ===== Backend server config =====
+        const SERVER_URL = 'http://localhost:8765';
+        let serverAvailable = false;
+        let loAvailable = false;
+
+        // Check server on load
+        fetch(SERVER_URL + '/health').then(r => r.json()).then(data => {
+            serverAvailable = true;
+            loAvailable = data.libreoffice_available;
+            updateBackendStatus();
+        }).catch(() => {
+            serverAvailable = false;
+            updateBackendStatus();
+        });
+
+        function updateBackendStatus() {
+            const el = document.getElementById('backendStatus');
+            if (!el) return;
+            if (serverAvailable && loAvailable) {
+                el.innerHTML = '<span style="color:#22c55e">●</span> LibreOffice';
+                el.title = 'LibreOffice 后端就绪';
+            } else if (serverAvailable && !loAvailable) {
+                el.innerHTML = '<span style="color:#fbbf24">●</span> Mammoth (LibreOffice 未装)';
+                el.title = 'Python 服务运行中，但 LibreOffice 未安装，.docx 将使用 mammoth 转换';
+            } else {
+                el.innerHTML = '<span style="color:#64748b">●</span> Mammoth (server 未启动)';
+                el.title = 'Python 服务未启动，运行: python server.py';
+            }
+        }
+
+        // ===== Async mammoth loader — fallback when server unavailable =====
+        const mammothPromise = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = 'https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js';
+            s.onload = resolve;
+            s.onerror = () => reject(new Error('mammoth.js CDN load failed'));
+            document.head.appendChild(s);
+        });
+
         // ===== State =====
         const docStore = new Map();  // id -> { name, html, size, status, warnings, manualVars: [] }
         let activeId = null;
         let idCounter = 0;
         let pendingSelection = null; // { text, range }
         let plainTextCache = '';     // cache stripped HTML for fast occurrence counting
+        let varPositions = [];       // position data for current doc's variables
+
+        // A4 page dimensions (px at 96 DPI)
+        const PAGE = { width: 794, height: 1123, padTop: 72, padBot: 72, padLeft: 80, padRight: 80 };
+        PAGE.contentH = PAGE.height - PAGE.padTop - PAGE.padBot;   // 979px
+        PAGE.contentW = PAGE.width - PAGE.padLeft - PAGE.padRight; // 634px
 
         // ===== DOM refs =====
         const dropZone = document.getElementById('dropZone');
@@ -734,19 +832,15 @@
 
         function suggestVarName(text) {
             const trimmed = text.trim();
-            // 1. Exact dictionary match
             if (VAR_DICT[trimmed]) return VAR_DICT[trimmed];
-            // 2. Check if text contains a dict key
             for (const [cn, en] of Object.entries(VAR_DICT)) {
                 if (trimmed.includes(cn)) return en;
             }
-            // 3. If pure English, camelCase it
             if (/^[a-zA-Z\s]+$/.test(trimmed)) {
                 return trimmed.split(/\s+/).map((w, i) =>
                     i === 0 ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()
                 ).join('');
             }
-            // 4. Fallback: use text as-is (stripped)
             return trimmed.replace(/\s+/g, '').slice(0, 20);
         }
 
@@ -798,7 +892,6 @@
                 return `<div class="occ-item">${highlighted}</div>`;
             }).join('');
             panel.innerHTML = `<div class="occ-header">${occurrences.length} occurrences found</div>${items}`;
-            // Position below toolbar
             const tbRect = markToolbar.getBoundingClientRect();
             panel.style.top = (tbRect.bottom + 4) + 'px';
             panel.style.left = tbRect.left + 'px';
@@ -812,30 +905,25 @@
         // Debounce selection check
         let selTimeout = null;
         document.addEventListener('mouseup', (e) => {
-            // Don't interfere if clicking on the toolbar itself
             if (markToolbar.contains(e.target)) return;
 
             clearTimeout(selTimeout);
             selTimeout = setTimeout(() => {
                 const sel = window.getSelection();
                 const text = sel.toString().trim();
-                // Check if selection is inside previewContent
                 if (!text || !sel.rangeCount || !previewContent.contains(sel.anchorNode)) {
                     hideMarkToolbar();
                     return;
                 }
                 pendingSelection = { text };
-                // Auto-suggest variable name
                 const suggestion = suggestVarName(text);
                 varNameInput.value = suggestion;
-                // Count occurrences
                 const doc = docStore.get(activeId);
                 const occurrences = doc ? countOccurrences(doc.html, text) : 1;
                 const occInfo = document.getElementById('occurrenceInfo');
                 const btnReplaceAll = document.getElementById('btnReplaceAll');
                 occInfo.textContent = occurrences > 1 ? `${occurrences}处` : '';
                 btnReplaceAll.style.display = occurrences > 1 ? 'inline-block' : 'none';
-                // Position toolbar near selection
                 const rect = sel.getRangeAt(0).getBoundingClientRect();
                 const vpHeight = window.innerHeight;
                 let top = rect.bottom + 8;
@@ -849,13 +937,11 @@
             }, 100);
         });
 
-        // Hide toolbar when clicking outside
         document.addEventListener('mousedown', (e) => {
             if (markToolbar.contains(e.target)) return;
             hideMarkToolbar();
         });
 
-        // Prevent toolbar interactions from stealing focus / collapsing selection
         markToolbar.addEventListener('mousedown', (e) => {
             e.preventDefault();
         });
@@ -882,28 +968,29 @@
             const doc = docStore.get(activeId);
             const selectedText = pendingSelection.text;
 
-            // Store the manual variable mapping
             if (!doc.manualVars) doc.manualVars = [];
             doc.manualVars.push({ original: selectedText, varName: varName });
 
-            // Replace in HTML
-            const fullVar = '${' + varName + '}';
+            const fullVar = '$' + varName + '$';
             doc.html = replaceTextInHtml(doc.html, selectedText, fullVar, replaceAll);
 
-            // Re-render
+            // Re-render with variable wrapping
             previewContent.innerHTML = doc.html;
+            wrapVariablesInPreview(previewContent);
+            varPositions = computeVariablePositions();
+
             splitPreview.innerHTML = doc.html;
             codeContent.value = formatHTML(doc.html);
             splitCode.textContent = formatHTML(doc.html);
-            renderVariables(extractVariables(doc.html), doc.manualVars);
 
-            const replacedCount = replaceAll ? countOccurrences(doc.html, selectedText) === 0 ? 'all' : 'some' : '1';
+            const vars = extractVariables(doc.html);
+            renderVariables(vars, doc.manualVars, varPositions);
+
             window.getSelection().removeAllRanges();
             hideMarkToolbar();
         }
 
         function replaceTextInHtml(html, searchText, replacement, replaceAll) {
-            // Split HTML into tags and text, only replace in text portions
             const parts = html.split(/(<[^>]+>)/);
             let count = 0;
             for (let i = 0; i < parts.length; i++) {
@@ -924,7 +1011,6 @@
             fileInput.value = '';
         });
 
-        // Drag — drop zone
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
         dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
         dropZone.addEventListener('drop', (e) => {
@@ -933,7 +1019,6 @@
             if (e.dataTransfer.files.length) handleFiles(Array.from(e.dataTransfer.files));
         });
 
-        // Global drag
         document.addEventListener('dragover', (e) => e.preventDefault());
         document.addEventListener('drop', (e) => {
             e.preventDefault();
@@ -942,13 +1027,15 @@
 
         // ===== Batch Processing =====
         function handleFiles(files) {
-            const validFiles = files.filter(f => f.name.endsWith('.docx') || f.name.endsWith('.doc'));
+            const validFiles = files.filter(f => {
+                const ext = f.name.toLowerCase();
+                return ext.endsWith('.docx') || ext.endsWith('.doc') || ext.endsWith('.html') || ext.endsWith('.htm');
+            });
             if (!validFiles.length) {
-                alert('请选择 .docx 文件');
+                alert('请选择 .docx 或 .html 文件');
                 return;
             }
 
-            // Create entries & render sidebar immediately
             const newIds = [];
             for (const file of validFiles) {
                 const id = ++idCounter;
@@ -956,69 +1043,162 @@
                 newIds.push({ id, file });
             }
 
-            // Show result area
             dropZone.classList.add('hidden');
             resultArea.classList.add('visible');
             renderSidebar();
-
-            // Select first new file
             if (newIds.length) selectFile(newIds[0].id);
 
-            // Process in parallel
             for (const { id, file } of newIds) {
-                convertFile(id, file);
+                const ext = file.name.toLowerCase();
+                if (ext.endsWith('.html') || ext.endsWith('.htm')) {
+                    loadHTMLFile(id, file);
+                } else {
+                    convertFile(id, file);
+                }
             }
         }
 
-        function convertFile(id, file) {
+        // ===== Load .html file directly (preserves Word formatting) =====
+        function loadHTMLFile(id, file) {
             const reader = new FileReader();
             reader.onload = function(e) {
-                const arrayBuffer = e.target.result;
-                const header = new Uint8Array(arrayBuffer.slice(0, 8));
-                const isZip  = header[0] === 0x50 && header[1] === 0x4B;
-                const isOLE2 = header[0] === 0xD0 && header[1] === 0xCF;
+                let text = e.target.result;
+                // Extract <body> content if full HTML doc, otherwise use as-is
+                const bodyMatch = text.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+                let html = bodyMatch ? bodyMatch[1].trim() : text;
 
-                if (isOLE2) {
-                    docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['旧版 .doc 格式，请另存为 .docx'] });
-                    renderSidebar();
-                    if (activeId === id) renderActiveDoc();
-                    return;
-                }
-                if (!isZip) {
-                    docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['文件格式无效，不是标准 .docx'] });
-                    renderSidebar();
-                    if (activeId === id) renderActiveDoc();
-                    return;
-                }
+                // === Clean Word HTML garbage while preserving formatting ===
+                // Remove XML declarations
+                html = html.replace(/<\?xml[^?]*\?>/gi, '');
+                // Remove Word namespace tags like <o:p></o:p>, <v:shape>, <w:wrap> etc.
+                html = html.replace(/<\/?\w+:\w+[^>]*>/gi, '');
+                // Remove <!--[if ...]>...<![endif]--> conditional comments
+                html = html.replace(/<!--\[if[\s\S]*?<!\[endif\]-->/gi, '');
+                // Remove <link> tags
+                html = html.replace(/<link[^>]*>/gi, '');
+                // Remove VML images (keep <img> tags from Word)
+                html = html.replace(/<v:shape[\s\S]*?<\/v:shape>/gi, '');
+                html = html.replace(/<v:imagedata[^>]*>/gi, '');
+                // Remove Word-specific meta/link/script from body
+                html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+                // Keep inline style="..." for text-align, margins, etc.
+                // Remove class="Mso..." and other Word-specific class names (keeps styling via inline style)
+                html = html.replace(/\s+class="Mso[^"]*"/gi, '');
+                // Remove empty <span> wrappers that Word creates
+                html = html.replace(/<span\s*>/gi, '');
+                html = html.replace(/<\/span>/gi, '');
+                // Remove lang attributes
+                html = html.replace(/\s+lang="[^"]*"/gi, '');
 
-                mammoth.convertToHtml({ arrayBuffer }, {
-                    convertImage: mammoth.images.imgElement(function(image) {
-                        return image.read("base64then").then(function(imageBuffer) {
-                            return { src: "data:" + image.contentType + ";base64," + imageBuffer };
-                        });
-                    }),
-                }).then(result => {
-                    docStore.set(id, {
-                        name: file.name,
-                        html: result.value,
-                        size: file.size,
-                        status: 'done',
-                        warnings: result.messages.map(m => m.message)
-                    });
-                    renderSidebar();
-                    if (activeId === id) renderActiveDoc();
-                }).catch(err => {
-                    docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: [err.message] });
-                    renderSidebar();
-                    if (activeId === id) renderActiveDoc();
+                docStore.set(id, {
+                    name: file.name,
+                    html: html,
+                    size: file.size,
+                    status: 'done',
+                    warnings: ['HTML 直接导入（保留原始排版）']
                 });
+                renderSidebar();
+                if (activeId === id) renderActiveDoc();
             };
             reader.onerror = () => {
                 docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['文件读取失败'] });
                 renderSidebar();
                 if (activeId === id) renderActiveDoc();
             };
-            reader.readAsArrayBuffer(file);
+            reader.readAsText(file, 'utf-8');
+        }
+
+        function convertFile(id, file) {
+            // Try Python server first (LibreOffice conversion)
+            if (serverAvailable && loAvailable) {
+                convertViaServer(id, file);
+            } else {
+                convertViaMammoth(id, file);
+            }
+        }
+
+        function convertViaServer(id, file) {
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch(SERVER_URL + '/convert', {
+                method: 'POST',
+                body: formData,
+            }).then(r => {
+                if (!r.ok) return r.json().then(d => Promise.reject(d.error || 'Server error'));
+                return r.json();
+            }).then(data => {
+                docStore.set(id, {
+                    name: file.name,
+                    html: data.html,
+                    size: file.size,
+                    status: 'done',
+                    warnings: ['LibreOffice 转换（保留原始排版）']
+                });
+                renderSidebar();
+                if (activeId === id) renderActiveDoc();
+            }).catch(err => {
+                console.warn('Server conversion failed, falling back to mammoth:', err);
+                convertViaMammoth(id, file);
+            });
+        }
+
+        function convertViaMammoth(id, file) {
+            mammothPromise.then(() => {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const arrayBuffer = e.target.result;
+                    const header = new Uint8Array(arrayBuffer.slice(0, 8));
+                    const isZip  = header[0] === 0x50 && header[1] === 0x4B;
+                    const isOLE2 = header[0] === 0xD0 && header[1] === 0xCF;
+
+                    if (isOLE2) {
+                        docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['旧版 .doc 格式，请另存为 .docx'] });
+                        renderSidebar();
+                        if (activeId === id) renderActiveDoc();
+                        return;
+                    }
+                    if (!isZip) {
+                        docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['文件格式无效，不是标准 .docx'] });
+                        renderSidebar();
+                        if (activeId === id) renderActiveDoc();
+                        return;
+                    }
+
+                    mammoth.convertToHtml({ arrayBuffer }, {
+                        convertImage: mammoth.images.imgElement(function(image) {
+                            return image.read("base64then").then(function(imageBuffer) {
+                                return { src: "data:" + image.contentType + ";base64," + imageBuffer };
+                            });
+                        }),
+                    }).then(result => {
+                        const html = fixMammothLists(result.value);
+                        docStore.set(id, {
+                            name: file.name,
+                            html: html,
+                            size: file.size,
+                            status: 'done',
+                            warnings: result.messages.map(m => m.message)
+                        });
+                        renderSidebar();
+                        if (activeId === id) renderActiveDoc();
+                    }).catch(err => {
+                        docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: [err.message] });
+                        renderSidebar();
+                        if (activeId === id) renderActiveDoc();
+                    });
+                };
+                reader.onerror = () => {
+                    docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['文件读取失败'] });
+                    renderSidebar();
+                    if (activeId === id) renderActiveDoc();
+                };
+                reader.readAsArrayBuffer(file);
+            }).catch(err => {
+                docStore.set(id, { name: file.name, html: '', size: file.size, status: 'error', warnings: ['mammoth.js 加载失败: ' + err.message] });
+                renderSidebar();
+                if (activeId === id) renderActiveDoc();
+            });
         }
 
         // ===== Sidebar =====
@@ -1046,7 +1226,6 @@
                 </div>
             `).join('');
 
-            // Buttons
             const hasDone = entries.some(([_, d]) => d.status === 'done');
             btnDownloadAll.disabled = !hasDone;
         }
@@ -1090,6 +1269,105 @@
             switchTab('preview');
         }
 
+        // ===== Variable Position Tracking =====
+
+        /** Walk text nodes in a container, wrap ${…} patterns in <span class="var-marker"> */
+        function wrapVariablesInPreview(container) {
+            const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+            const nodesToReplace = [];
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                if (node.nodeValue && /\$[^$\s]+\$/.test(node.nodeValue)) {
+                    nodesToReplace.push(node);
+                }
+            }
+            const regex = /(\$[^$\s]{1,50}\$)/g;
+            for (const textNode of nodesToReplace) {
+                const frag = document.createDocumentFragment();
+                const text = textNode.nodeValue;
+                let lastIdx = 0;
+                let match;
+                regex.lastIndex = 0;
+                while ((match = regex.exec(text)) !== null) {
+                    if (match.index > lastIdx) {
+                        frag.appendChild(document.createTextNode(text.slice(lastIdx, match.index)));
+                    }
+                    const span = document.createElement('span');
+                    span.className = 'var-marker';
+                    span.textContent = match[1];
+                    span.dataset.var = match[1].slice(1, -1);
+                    frag.appendChild(span);
+                    lastIdx = regex.lastIndex;
+                }
+                if (lastIdx < text.length) {
+                    frag.appendChild(document.createTextNode(text.slice(lastIdx)));
+                }
+                textNode.parentNode.replaceChild(frag, textNode);
+            }
+        }
+
+        /** Compute page/x/y for every .var-marker inside #previewContent */
+        function computeVariablePositions() {
+            const paper = previewContent;
+            const markers = paper.querySelectorAll('.var-marker');
+            const positions = [];
+
+            // We need the scroll container's scroll offset
+            const scrollContainer = document.getElementById('panelPreview');
+            const scrollTop = scrollContainer ? scrollContainer.scrollTop : 0;
+            const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0;
+
+            const paperRect = paper.getBoundingClientRect();
+
+            for (const marker of markers) {
+                const rect = marker.getBoundingClientRect();
+                // Position relative to paper element (accounting for scroll)
+                const relX = rect.left - paperRect.left + scrollLeft;
+                const relY = rect.top - paperRect.top + scrollTop;
+
+                // Which page? (1-based)
+                const page = Math.max(1, Math.floor((relY - PAGE.padTop) / PAGE.contentH) + 1);
+                // Y within the page
+                const pageY = ((relY - PAGE.padTop) % PAGE.contentH + PAGE.contentH) % PAGE.contentH;
+                // X within content area
+                const pageX = Math.max(0, relX - PAGE.padLeft);
+
+                // Percentage (for e-contract API)
+                const xPct = Math.max(0, Math.min(100, (pageX / PAGE.contentW) * 100));
+                const yPct = Math.max(0, Math.min(100, (pageY / PAGE.contentH) * 100));
+
+                positions.push({
+                    varName: marker.dataset.var,
+                    page,
+                    x: Math.round(pageX),
+                    y: Math.round(pageY),
+                    xPct: +xPct.toFixed(1),
+                    yPct: +yPct.toFixed(1),
+                    width: Math.round(rect.width),
+                    element: marker
+                });
+            }
+            return positions;
+        }
+
+        /** Scroll to and flash-highlight a variable in the preview */
+        function locateVariable(varName, occurrence) {
+            switchTab('preview');
+            const markers = previewContent.querySelectorAll(`.var-marker[data-var="${varName}"]`);
+            const target = (occurrence !== undefined && markers[occurrence])
+                ? markers[occurrence]
+                : markers[0];
+            if (!target) return;
+
+            // Scroll into view
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+            // Flash highlight
+            markers.forEach(m => m.classList.remove('flash'));
+            target.classList.add('flash');
+            setTimeout(() => target.classList.remove('flash'), 1800);
+        }
+
         // ===== Render Active Doc =====
         function renderActiveDoc() {
             if (!activeId || !docStore.has(activeId)) {
@@ -1101,6 +1379,7 @@
                 btnCopy.disabled = true;
                 btnDownload.disabled = true;
                 warningsEl.classList.remove('visible');
+                varPositions = [];
                 return;
             }
 
@@ -1134,19 +1413,23 @@
                     warningsEl.classList.add('visible');
                 }
                 toolbarInfo.textContent = 'error';
+                varPositions = [];
                 return;
             }
 
-            // Done
-            const html = doc.html;
-            previewContent.innerHTML = html;
-            splitPreview.innerHTML = html;
-            codeContent.value = formatHTML(html);
-            splitCode.textContent = formatHTML(html);
+            // Done — render HTML
+            previewContent.innerHTML = doc.html;
+            wrapVariablesInPreview(previewContent);
+            varPositions = computeVariablePositions();
+
+            splitPreview.innerHTML = doc.html;
+            codeContent.value = formatHTML(doc.html);
+            splitCode.textContent = formatHTML(doc.html);
             btnCopy.disabled = false;
             btnDownload.disabled = false;
 
             // Stats
+            const html = doc.html;
             const imgCount = (html.match(/<img /g) || []).length;
             const tableCount = (html.match(/<table/g) || []).length;
             const vars = extractVariables(html);
@@ -1156,8 +1439,11 @@
             if (vars.length) stats.push(`${vars.length} variables`);
             toolbarInfo.textContent = stats.join(' · ');
 
-            // Variables
-            renderVariables(vars, doc.manualVars || []);
+            // Cache for download
+            doc._lastPositions = varPositions;
+
+            // Variables with position data
+            renderVariables(vars, doc.manualVars || [], varPositions);
 
             // Warnings
             if (doc.warnings.length) {
@@ -1171,8 +1457,8 @@
         // ===== Variables =====
         function extractVariables(html) {
             const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ');
-            const regex = /\$\{([^}]+)\}/g;
-            const seen = new Map(); // varName -> { count, contexts }
+            const regex = /\$([^$\s]{1,50})\$/g;
+            const seen = new Map();
             let m;
             while ((m = regex.exec(text)) !== null) {
                 const full = m[0];
@@ -1185,28 +1471,50 @@
                 entry.count++;
                 if (entry.contexts.length < 3) entry.contexts.push(ctx);
             }
-            return Array.from(seen.entries()).map(([name, data]) => ({ name, full: '${' + name + '}', count: data.count, contexts: data.contexts }));
+            return Array.from(seen.entries()).map(([name, data]) => ({ name, full: '$' + name + '$', count: data.count, contexts: data.contexts }));
         }
 
-        function renderVariables(vars, manualVars) {
+        function renderVariables(vars, manualVars, positions) {
             manualVars = manualVars || [];
+            positions = positions || [];
             const el = document.getElementById('varsContent');
             if (!vars.length && !manualVars.length) {
                 el.innerHTML = '<p class="vars-empty">No template variables detected. Select text in Preview and use the mark toolbar to create variables.</p>';
                 return;
             }
 
+            // Build position lookup: varName -> [positions]
+            const posMap = new Map();
+            for (const p of positions) {
+                if (!posMap.has(p.varName)) posMap.set(p.varName, []);
+                posMap.get(p.varName).push(p);
+            }
+
             // Auto-detected rows
             const autoRows = vars.map((v, i) => {
                 const ctxHtml = v.contexts.map(c => {
-                    const highlighted = escapeHtml(c).replace(/\$\{[^}]+\}/g, '<mark>$&</mark>');
+                    const highlighted = escapeHtml(c).replace(/\$[^$\s]{1,50}\$/g, '<mark>$&</mark>');
                     return `<div class="var-context" title="${escapeAttr(c)}">${highlighted}</div>`;
                 }).join('');
+
+                // Position info
+                const posArr = posMap.get(v.name) || [];
+                const posHtml = posArr.length
+                    ? posArr.map((p, pi) =>
+                        `<div style="margin:2px 0">
+                            <span class="pos-page">P${p.page}</span>
+                            <span class="pos-coord">(${p.xPct}%, ${p.yPct}%)</span>
+                            <button class="btn-locate" onclick="locateVariable('${escapeAttr(v.name)}', ${pi})">Locate</button>
+                        </div>`
+                    ).join('')
+                    : '<span style="color:#475569">—</span>';
+
                 return `<tr>
                     <td>${i + 1}</td>
                     <td class="var-name">${escapeHtml(v.name)}</td>
                     <td class="var-full">${escapeHtml(v.full)}</td>
                     <td>${v.count}</td>
+                    <td>${posHtml}</td>
                     <td>${ctxHtml}</td>
                     <td><span class="tag-auto">auto</span></td>
                 </tr>`;
@@ -1214,11 +1522,23 @@
 
             // Manual rows
             const manualRows = manualVars.map((v, i) => {
+                const posArr = posMap.get(v.varName) || [];
+                const posHtml = posArr.length
+                    ? posArr.map((p, pi) =>
+                        `<div style="margin:2px 0">
+                            <span class="pos-page">P${p.page}</span>
+                            <span class="pos-coord">(${p.xPct}%, ${p.yPct}%)</span>
+                            <button class="btn-locate" onclick="locateVariable('${escapeAttr(v.varName)}', ${pi})">Locate</button>
+                        </div>`
+                    ).join('')
+                    : '<span style="color:#475569">—</span>';
+
                 return `<tr>
                     <td>${vars.length + i + 1}</td>
                     <td class="var-name">${escapeHtml(v.varName)}</td>
-                    <td class="var-full">${escapeHtml('${' + v.varName + '}')}</td>
+                    <td class="var-full">${escapeHtml('$' + v.varName + '$')}</td>
                     <td>1</td>
+                    <td>${posHtml}</td>
                     <td><div class="var-context">${escapeHtml(v.original)}</div></td>
                     <td><span class="tag-manual">manual</span></td>
                 </tr>`;
@@ -1240,7 +1560,8 @@
                         <th style="width:40px">#</th>
                         <th>Variable</th>
                         <th>Full Syntax</th>
-                        <th style="width:60px">Count</th>
+                        <th style="width:50px">Count</th>
+                        <th style="width:180px">Position (Page, X%, Y%)</th>
                         <th>Context / Original</th>
                         <th style="width:60px">Source</th>
                     </tr></thead>
@@ -1253,8 +1574,16 @@
             const doc = docStore.get(activeId);
             const vars = extractVariables(doc.html);
             const manualVars = doc.manualVars || [];
-            const lines = vars.map(v => `${v.full}\t${v.name}\t${v.count}\tauto`);
-            manualVars.forEach(v => lines.push(`\${${v.varName}}\t${v.varName}\t1\tmanual\t← ${v.original}`));
+            const lines = vars.map(v => {
+                const posArr = varPositions.filter(p => p.varName === v.name);
+                const posStr = posArr.map(p => `P${p.page}(${p.xPct}%,${p.yPct}%)`).join('; ') || '—';
+                return `${v.full}\t${v.name}\t${v.count}\tauto\t${posStr}`;
+            });
+            manualVars.forEach(v => {
+                const posArr = varPositions.filter(p => p.varName === v.varName);
+                const posStr = posArr.map(p => `P${p.page}(${p.xPct}%,${p.yPct}%)`).join('; ') || '—';
+                lines.push(`$${v.varName}$\t${v.varName}\t1\tmanual\t${posStr}\t← ${v.original}`);
+            });
             navigator.clipboard.writeText(lines.join('\n')).then(() => {
                 const btn = document.querySelector('.vars-copy-btn');
                 btn.textContent = 'Copied!';
@@ -1268,6 +1597,8 @@
             const edited = codeContent.value;
             docStore.get(activeId).html = edited;
             previewContent.innerHTML = edited;
+            wrapVariablesInPreview(previewContent);
+            varPositions = computeVariablePositions();
             splitPreview.innerHTML = edited;
             splitCode.textContent = edited;
             btnApplyFlash();
@@ -1278,6 +1609,8 @@
             const original = docStore.get(activeId).html;
             codeContent.value = formatHTML(original);
             previewContent.innerHTML = original;
+            wrapVariablesInPreview(previewContent);
+            varPositions = computeVariablePositions();
             splitPreview.innerHTML = original;
             splitCode.textContent = formatHTML(original);
         }
@@ -1294,6 +1627,50 @@
             document.querySelector(`.tab[data-tab="${tab}"]`).classList.add('active');
             document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
             document.getElementById(`panel${tab.charAt(0).toUpperCase() + tab.slice(1)}`).classList.add('active');
+            // Recompute positions when switching to vars tab (scroll may have changed)
+            if (tab === 'vars' && activeId && docStore.has(activeId)) {
+                varPositions = computeVariablePositions();
+                const vars = extractVariables(docStore.get(activeId).html);
+                renderVariables(vars, docStore.get(activeId).manualVars || [], varPositions);
+            }
+        }
+
+        // ===== Export Variables =====
+        function buildVariablesData(doc, positions) {
+            const vars = extractVariables(doc.html);
+            const manualVars = doc.manualVars || [];
+            const posMap = new Map();
+            for (const p of (positions || [])) {
+                if (!posMap.has(p.varName)) posMap.set(p.varName, []);
+                posMap.get(p.varName).push({ page: p.page, xPercent: p.xPct, yPercent: p.yPct, x: p.x, y: p.y, width: p.width });
+            }
+            const result = [];
+            for (const v of vars) {
+                result.push({
+                    name: v.name, syntax: v.full, count: v.count, source: 'auto',
+                    positions: posMap.get(v.name) || []
+                });
+            }
+            const autoNames = new Set(vars.map(v => v.name));
+            for (const mv of manualVars) {
+                if (autoNames.has(mv.varName)) continue;
+                result.push({
+                    name: mv.varName, syntax: '$' + mv.varName + '$', count: 1,
+                    source: 'manual', original: mv.original,
+                    positions: posMap.get(mv.varName) || []
+                });
+            }
+            return { source: doc.name, variables: result };
+        }
+
+        function downloadVarsJSON(baseName, data) {
+            const json = JSON.stringify(data, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = baseName + '.vars.json';
+            a.click();
+            URL.revokeObjectURL(a.href);
         }
 
         // ===== Actions =====
@@ -1309,25 +1686,89 @@
         function downloadCurrentHTML() {
             if (!activeId || !docStore.has(activeId)) return;
             const doc = docStore.get(activeId);
-            downloadSingleHTML(doc.name.replace(/\.docx?$/i, ''), doc.html);
+            const baseName = doc.name.replace(/\.docx?$/i, '');
+            downloadSingleHTML(baseName, doc.html);
+            downloadVarsJSON(baseName, buildVariablesData(doc, varPositions));
         }
 
         function downloadAllHTML() {
-            for (const [_, doc] of docStore) {
+            const savedId = activeId;
+            for (const [id, doc] of docStore) {
                 if (doc.status === 'done' && doc.html) {
-                    downloadSingleHTML(doc.name.replace(/\.docx?$/i, ''), doc.html);
+                    // Render each doc to compute positions
+                    selectFile(id);
+                    const baseName = doc.name.replace(/\.docx?$/i, '');
+                    downloadSingleHTML(baseName, doc.html);
+                    downloadVarsJSON(baseName, buildVariablesData(doc, varPositions));
                 }
             }
+            // Restore original selection
+            if (savedId) selectFile(savedId);
         }
 
         function downloadSingleHTML(baseName, html) {
-            const fullHTML = `<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<title>${escapeHtml(baseName)}</title>\n<style>body{font-family:"SimSun","Times New Roman",serif;max-width:800px;margin:40px auto;padding:0 20px;color:#1e293b;line-height:1.8;font-size:14px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #94a3b8;padding:6px 10px;text-align:left}th{background:#f1f5f9}img{max-width:100%;height:auto}h1{font-size:22px}h2{font-size:18px}h3{font-size:16px}p{text-align:justify;margin:6px 0}ul,ol{padding-left:28px}</style>\n</head>\n<body>\n${html}\n</body>\n</html>`;
+            const fullHTML = `<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n<meta charset="UTF-8">\n<title>${escapeHtml(baseName)}</title>\n<style>body{font-family:"SimSun","Times New Roman",serif;max-width:800px;margin:40px auto;padding:0 20px;color:#1e293b;line-height:1.8;font-size:14px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #94a3b8;padding:6px 10px;text-align:left}th{background:#f1f5f9}img{max-width:100%;height:auto}h1{font-size:22px}h2{font-size:18px}h3{font-size:16px}p{text-align:justify;margin:6px 0}p[align=center]{text-align:center}p[align=left]{text-align:left}p[align=right]{text-align:right}ul,ol{padding-left:28px}</style>\n</head>\n<body>\n${html}\n</body>\n</html>`;
             const blob = new Blob([fullHTML], { type: 'text/html' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = baseName + '.html';
             a.click();
             URL.revokeObjectURL(a.href);
+        }
+
+        // ===== Post-process: Fix mammoth fragmented lists =====
+        // Mammoth pattern: <ul><li><ol><li>item</li></ol></li></ul><p>translation</p><ul><li><ol><li>next</li></ol></li></ul>
+        // Fix: flatten wrappers first, then merge adjacent list blocks
+        function fixMammothLists(html) {
+            // Phase 1: Repeatedly flatten nested single-item wrappers until stable
+            for (let pass = 0; pass < 10; pass++) {
+                const before = html;
+                html = html.replace(/<ul>\s*<li>\s*<ol>([\s\S]*?)<\/ol>\s*<\/li>\s*<\/ul>/gi, '<ol>$1</ol>');
+                html = html.replace(/<ul>\s*<li>\s*<ul>([\s\S]*?)<\/ul>\s*<\/li>\s*<\/ul>/gi, '<ul>$1</ul>');
+                html = html.replace(/<ol>\s*<li>\s*<ol>([\s\S]*?)<\/ol>\s*<\/li>\s*<\/ol>/gi, '<ol>$1</ol>');
+                if (html === before) break;
+            }
+
+            // Phase 2: Merge consecutive single-item list blocks separated by <p>
+            // Pattern: </li></ol><p>text</p><ol><li>  or  </li></ul><p>text</p><ul><li>
+            for (let pass = 0; pass < 20; pass++) {
+                const before = html;
+                // Merge ol blocks with <p> translation in between
+                html = html.replace(/<\/li>\s*<\/ol>\s*(<p[^>]*>([\s\S]*?)<\/p>\s*)<ol>\s*<li>/gi, '$1<li>');
+                html = html.replace(/<\/li>\s*<\/ul>\s*(<p[^>]*>([\s\S]*?)<\/p>\s*)<ul>\s*<li>/gi, '$1<li>');
+                // Direct adjacency (no <p> between)
+                html = html.replace(/<\/li>\s*<\/ol>\s*<ol>\s*<li>/gi, '<li>');
+                html = html.replace(/<\/li>\s*<\/ul>\s*<ul>\s*<li>/gi, '<li>');
+                html = html.replace(/<\/ol>\s*<ol>\s*<li>/gi, '<li>');
+                html = html.replace(/<\/ul>\s*<ul>\s*<li>/gi, '<li>');
+                if (html === before) break;
+            }
+
+            // Phase 3: Clean empty lists
+            html = html.replace(/<ol>\s*<\/ol>/g, '');
+            html = html.replace(/<ul>\s*<\/ul>/g, '');
+
+            return html;
+        }
+
+        // ===== LibreOffice Conversion =====
+        // Checks if LibreOffice is available on the system
+        async function detectLibreOffice() {
+            // Common install paths on Windows
+            const paths = [
+                'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
+                'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
+            ];
+            for (const p of paths) {
+                try {
+                    const stat = await new Promise((resolve, reject) => {
+                        // Can't check file existence in browser, return path hint
+                        resolve(p);
+                    });
+                    return p;
+                } catch(e) {}
+            }
+            return null;
         }
 
         // ===== Utils =====
@@ -1344,7 +1785,7 @@
         }
 
         function escapeAttr(str) {
-            return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/'/g, '&#39;');
         }
     </script>
 </body>
