@@ -115,6 +115,9 @@ def convert_with_libreoffice(docx_path, output_dir):
     body = re.sub(r'\s+lang="[^"]*"', '', body)
     # Strip <font ...> and </font> tags, keep inner content
     body = re.sub(r'</?font[^>]*>', '', body, flags=re.IGNORECASE)
+    # Fix fragmented variable syntax: LO wraps $, {, } in separate formatting tags
+    # e.g., <b>$</b>{contractNo}<b>$</b>  →  ${contractNo}
+    body = _fix_fragmented_variables(body)
     # Clean <p> styles: remove LO artifact margin-right
     body = re.sub(r'margin-right:\s*-0\.08cm;\s*', '', body)
     body = re.sub(r';\s*margin-right:\s*-0\.08cm', '', body)
@@ -150,6 +153,33 @@ def _normalize_p_tag(match):
     if style:
         return f'<p align="{align}" style="{style}">'
     return f'<p align="{align}">'
+
+
+def _fix_fragmented_variables(html):
+    """Recombine variable syntax $var$ or ${var} split across formatting tags.
+
+    LO wraps $, {, } in separate <b>/<i>/<span> tags. This finds $...$ pairs
+    within 400 chars, strips all tags/whitespace, and reconstructs ${varName}.
+    """
+    result = []
+    i = 0
+    while i < len(html):
+        if html[i] == '$':
+            j = html.find('$', i + 1)
+            if j > 0 and (j - i) < 400:
+                between = html[i+1:j]
+                # Strip HTML tags
+                dirty = re.sub(r'<[^>]+>', '', between)
+                # Collapse all whitespace (newlines from LO formatting)
+                clean = re.sub(r'\s+', '', dirty)
+                if clean and len(clean) <= 80:
+                    name = clean.strip('{}')
+                    result.append('$' + name + '$')
+                    i = j + 1
+                    continue
+        result.append(html[i])
+        i += 1
+    return ''.join(result)
 
 
 def fix_libreoffice_lists(html):
